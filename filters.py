@@ -47,7 +47,7 @@ ROLE_PATTERNS = [
     r"\bswe\b",
     r"software\s+develop",
     r"\bdeveloper\b",
-    r"\bengineer\b",
+    r"\b(back[\s-]?end|front[\s-]?end|full[\s-]?stack|platform|systems?|infrastructure|site\s+reliability|cloud|security|devops|embedded)[\s-]+engineer",
     r"data\s+analyst",
     r"\bmle\b",
     r"\bsde\b",

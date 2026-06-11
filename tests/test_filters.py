@@ -66,3 +66,8 @@ def test_generic_engineer_title_with_signal_is_target():
 def test_include_signal_in_description_only():
     # tracker rows / JD bodies often carry the signal, not the title
     assert filters.is_target("Software Engineer", "New grad role. 0-2 years preferred.")
+
+
+def test_non_software_engineering_excluded():
+    assert not filters.is_target("New Grad Mechanical Engineer")
+    assert not filters.is_target("Sales Engineer, Entry Level")
