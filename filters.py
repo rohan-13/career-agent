@@ -9,6 +9,7 @@ import re
 INCLUDE_PATTERNS = [
     r"new[\s-]*grad",
     r"university\s+grad",
+    # Grad year is hardcoded; bump to 2028 listings when the 2027 cycle ends.
     r"class\s+of\s+2027",
     r"\b2027\b",
     r"entry[\s-]*level",
@@ -44,6 +45,12 @@ ROLE_PATTERNS = [
     r"\bai\s+engineer",
     r"analytics\s+engineer",
     r"\bswe\b",
+    r"software\s+develop",
+    r"\bdeveloper\b",
+    r"\bengineer\b",
+    r"data\s+analyst",
+    r"\bmle\b",
+    r"\bsde\b",
 ]
 
 
@@ -59,6 +66,11 @@ def is_target(title, description=""):
 
 
 def match_strength(title):
+    """Ranking refinement (0-3) for titles that already passed is_target().
+
+    Title-only by design: it does not re-check role/exclude/description, so a
+    non-zero score does NOT mean the job is a target. Filter first, then rank.
+    """
     if _any([r"new[\s-]*grad", r"class\s+of\s+2027", r"\b2027\b", r"university\s+grad"], title):
         return 3
     if _any([r"entry[\s-]*level", r"early\s+career", r"recent\s+grad"], title):
