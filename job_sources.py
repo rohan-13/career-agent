@@ -66,6 +66,7 @@ def insert_jobs(jobs, db_path=None):
 
 
 # --- ATS boards (structured JSON, no LLM needed) ---
+# posted_date semantics differ: greenhouse=updated_at (bumps on edits), ashby=publishedAt, lever=createdAt (UTC).
 
 # company: (ats, slug). Slugs verified live in Task 3 Step 5; fix any that 404.
 ATS_BOARDS = {
@@ -96,7 +97,7 @@ def parse_lever(data, company):
         {"title": j.get("text", ""), "company": company,
          "location": (j.get("categories") or {}).get("location", ""),
          "url": j.get("hostedUrl", ""),
-         "posted_date": (datetime.date.fromtimestamp(j["createdAt"] / 1000).isoformat()
+         "posted_date": (datetime.datetime.fromtimestamp(j["createdAt"] / 1000, datetime.timezone.utc).date().isoformat()
                          if j.get("createdAt") else ""),
          "source": "lever"}
         for j in data
@@ -106,7 +107,7 @@ def parse_lever(data, company):
 def parse_ashby(data, company):
     return [
         {"title": j.get("title", ""), "company": company,
-         "location": j.get("location", ""),
+         "location": j.get("location") or "",
          "url": j.get("jobUrl") or j.get("applyUrl") or "",
          "posted_date": (j.get("publishedAt") or "")[:10],
          "source": "ashby"}
@@ -126,7 +127,7 @@ def fetch_ats_boards():
     for company, (ats, slug) in ATS_BOARDS.items():
         url_tmpl, parse = _ATS_ENDPOINTS[ats]
         try:
-            res = requests.get(url_tmpl.format(slug=slug), timeout=20)
+            res = requests.get(url_tmpl.format(slug=slug), timeout=20, headers={"User-Agent": "Mozilla/5.0"})
             res.raise_for_status()
             jobs += parse(res.json(), company)
         except Exception as e:

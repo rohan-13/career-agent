@@ -31,7 +31,7 @@ def test_parse_lever():
     assert jobs[0]["company"] == "Plaid"
     assert jobs[0]["url"] == "https://jobs.lever.co/plaid/abc"
     assert jobs[0]["source"] == "lever"
-    assert jobs[0]["posted_date"]  # derived from createdAt epoch ms
+    assert jobs[0]["posted_date"] == "2026-06-11"  # 1781136000000 ms = 2026-06-11T00:00:00 UTC
 
 
 def test_parse_ashby():
