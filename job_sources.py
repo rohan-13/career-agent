@@ -35,7 +35,9 @@ def init_jobs_table(db_path=None):
     return con
 
 
-def _is_duplicate(con, job, threshold=90):
+# 85 matches parser.py's events threshold and catches cross-source title
+# variants like "Software Engineer, New Grad" vs "... New Grad (2027)".
+def _is_duplicate(con, job, threshold=85):
     rows = con.execute("SELECT title FROM jobs WHERE company = ?", (job["company"],)).fetchall()
     return any(fuzz.token_sort_ratio(job["title"], r[0]) >= threshold for r in rows)
 
@@ -46,11 +48,13 @@ def insert_jobs(jobs, db_path=None):
     new = []
     for job in jobs:
         if con.execute("SELECT 1 FROM jobs WHERE url = ?", (job["url"],)).fetchone():
+            logging.debug("skip dup url: %s", job["url"])
             continue
         if _is_duplicate(con, job):
+            logging.debug("skip fuzzy dup: %s @ %s", job["title"], job["company"])
             continue
         con.execute(
-            "INSERT INTO jobs (title, company, location, url, source, posted_date, match_score)"
+            "INSERT OR IGNORE INTO jobs (title, company, location, url, source, posted_date, match_score)"
             " VALUES (?,?,?,?,?,?,?)",
             (job["title"], job["company"], job.get("location", ""), job["url"],
              job.get("source", "web"), job.get("posted_date", ""), job.get("match_score", 0)),

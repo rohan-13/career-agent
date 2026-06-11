@@ -48,3 +48,11 @@ def test_status_defaults_to_new(tmp_path):
     job_sources.insert_jobs([JOB], db_path=db)
     con = sqlite3.connect(db)
     assert con.execute("SELECT status FROM jobs").fetchone()[0] == "new"
+
+
+def test_in_batch_duplicates_inserted_once(tmp_path):
+    db = tmp_path / "test.db"
+    same_url = dict(JOB)
+    near_title = dict(JOB, url="https://simplify.jobs/p/xyz", title="Software Engineer, New Grad (2027)")
+    new = job_sources.insert_jobs([JOB, same_url, near_title], db_path=db)
+    assert len(new) == 1
