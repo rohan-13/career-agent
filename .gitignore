@@ -1,0 +1,12 @@
+.env
+credentials.json
+token.json
+.linkedin_session.json
+.linkedin_last_run
+events.db
+data/raw/
+logs/
+digests/
+__pycache__/
+*.pyc
+.venv/
