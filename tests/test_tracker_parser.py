@@ -68,3 +68,17 @@ def test_age_cell_converted_to_date():
     jobs = job_sources.parse_tracker_markdown(SAMPLE, "simplify")
     expected = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
     assert jobs[0]["posted_date"] == expected
+
+
+def test_age_units_converted():
+    import job_sources
+    today = datetime.date.today()
+    assert job_sources._age_to_date("3mo") == (today - datetime.timedelta(days=90)).isoformat()
+    assert job_sources._age_to_date("1w") == (today - datetime.timedelta(days=7)).isoformat()
+    assert job_sources._age_to_date("Today") == today.isoformat()
+    assert job_sources._age_to_date("Jun 01") == ""
+
+
+def test_html_entities_decoded():
+    import job_sources
+    assert job_sources._strip_tags("AI &amp; ML Engineer") == "AI & ML Engineer"

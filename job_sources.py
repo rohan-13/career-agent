@@ -4,6 +4,7 @@ boards, plus the jobs table in events.db. (LinkedIn lives in linkedin_source.py.
 All fetchers return dicts: {title, company, location, url, posted_date, source}.
 """
 import datetime
+import html
 import json
 import logging
 import pathlib
@@ -146,7 +147,7 @@ TRACKER_REPOS = {
 
 _HREF_RE = re.compile(r'href="([^"]+)"')
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_TD_RE = re.compile(r"<td>(.*?)</td>", re.DOTALL)
+_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -159,13 +160,20 @@ def _first_url(cell):
 
 
 def _strip_tags(text):
-    return _TAG_RE.sub("", text).replace("**", "").strip()
+    return html.unescape(_TAG_RE.sub("", text).replace("**", "")).strip()
+
+
+_AGE_UNIT_DAYS = {"d": 1, "w": 7, "mo": 30, "y": 365}
 
 
 def _age_to_date(cell):
-    m = re.fullmatch(r"(\d+)d", cell.strip())
+    cell = cell.strip()
+    if cell.lower() == "today":
+        return datetime.date.today().isoformat()
+    m = re.fullmatch(r"(\d+)(d|w|mo|y)", cell)
     if m:
-        return (datetime.date.today() - datetime.timedelta(days=int(m.group(1)))).isoformat()
+        days = int(m.group(1)) * _AGE_UNIT_DAYS[m.group(2)]
+        return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     return ""
 
 

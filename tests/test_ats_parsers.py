@@ -50,3 +50,4 @@ def test_parse_ashby():
 def test_parse_handles_missing_fields():
     assert job_sources.parse_greenhouse({"jobs": [{"title": "SWE", "absolute_url": "u"}]}, "X")[0]["location"] == ""
     assert job_sources.parse_ashby({"jobs": [{"title": "SWE"}]}, "X")[0]["url"] == ""
+    assert job_sources.parse_ashby({"jobs": [{"title": "SWE", "location": None}]}, "X")[0]["location"] == ""
