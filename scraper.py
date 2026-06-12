@@ -18,8 +18,6 @@ SOURCES = {
     "jobfairx-calendar": "https://jobfairx.com/job-fair-calendar",
     "powertofly-events": "https://powertofly.com/events/",
     "ieee-career-fair": "https://careerfair.ieee.org/",
-    # New-grad role trackers (highest signal)
-    "simplify-new-grad": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
     # Company university-recruiting portals
     "microsoft-students": "https://careers.microsoft.com/v2/global/en/students",
     "microsoft-virtual-events": "https://careers.microsoft.com/v2/global/en/virtualevents",

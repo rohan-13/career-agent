@@ -133,3 +133,84 @@ def fetch_ats_boards():
         except Exception as e:
             logging.warning("ATS fetch failed for %s (%s/%s): %s", company, ats, slug, e)
     return jobs
+
+
+# --- GitHub new-grad trackers (HTML tables) ---
+# The Simplify repo uses HTML <tr><td> tables (not markdown pipes).
+# Each row: <tr>\n<td>Company</td>\n<td>Title</td>\n<td>Location</td>\n<td>Apply</td>\n<td>Age</td>
+
+# Verify in Task 4 Step 5 that these repos are alive; swap/add active 2027 trackers.
+TRACKER_REPOS = {
+    "simplify": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
+}
+
+_HREF_RE = re.compile(r'href="([^"]+)"')
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_TD_RE = re.compile(r"<td>(.*?)</td>", re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _first_url(cell):
+    m = _HREF_RE.search(cell)
+    if m:
+        return m.group(1)
+    m = _MD_LINK_RE.search(cell)
+    return m.group(2) if m else ""
+
+
+def _strip_tags(text):
+    return _TAG_RE.sub("", text).replace("**", "").strip()
+
+
+def _age_to_date(cell):
+    m = re.fullmatch(r"(\d+)d", cell.strip())
+    if m:
+        return (datetime.date.today() - datetime.timedelta(days=int(m.group(1)))).isoformat()
+    return ""
+
+
+def parse_tracker_markdown(md, source):
+    """Parse GitHub new-grad tracker READMEs.
+
+    Supports the HTML <tr><td> format used by SimplifyJobs/New-Grad-Positions
+    (each <td> on its own line, grouped by <tr> blocks).
+    """
+    jobs, last_company = [], None
+    # Split into <tr>...</tr> blocks; each block has 4-5 <td> lines
+    row_blocks = re.split(r"<tr>", md)
+    for block in row_blocks:
+        cells = _TD_RE.findall(block)
+        if len(cells) < 4:
+            continue
+        company_raw = cells[0].strip()
+        company = _strip_tags(company_raw)
+        if company in {"↳", ""}:
+            company = last_company
+        else:
+            last_company = company
+        if not company:
+            continue
+        url = _first_url(cells[3])
+        if not url:
+            continue  # locked (🔒) or no link
+        title = _strip_tags(cells[1])
+        location = _strip_tags(cells[2])
+        age_cell = cells[4] if len(cells) > 4 else ""
+        jobs.append({
+            "title": title, "company": company, "location": location,
+            "url": url, "posted_date": _age_to_date(age_cell.strip()),
+            "source": source,
+        })
+    return jobs
+
+
+def fetch_trackers():
+    jobs = []
+    for source, url in TRACKER_REPOS.items():
+        try:
+            res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            res.raise_for_status()
+            jobs += parse_tracker_markdown(res.text, source)
+        except Exception as e:
+            logging.warning("Tracker fetch failed for %s: %s", source, e)
+    return jobs
