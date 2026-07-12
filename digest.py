@@ -16,6 +16,7 @@ import os
 import pathlib
 import smtplib
 import sqlite3
+import sys
 from email.mime.text import MIMEText
 
 from dotenv import load_dotenv
@@ -136,10 +137,20 @@ def send_email(subject, body):
     to_addr = os.getenv("DIGEST_TO")
 
     if not password or not to_addr:
-        logging.info("send_email: GMAIL_APP_PASSWORD or DIGEST_TO not set; skipping email send.")
+        msg_text = "send_email: GMAIL_APP_PASSWORD or DIGEST_TO not set; skipping email send."
+        logging.warning(msg_text)
+        print(msg_text, file=sys.stderr)
         return False
 
-    from_addr = os.getenv("USER_EMAIL") or to_addr
+    from_addr = os.getenv("USER_EMAIL")
+    if not from_addr:
+        msg_text = (
+            "send_email: USER_EMAIL not set; skipping email send "
+            "(refusing to log in with the recipient's address as the username)."
+        )
+        logging.warning(msg_text)
+        print(msg_text, file=sys.stderr)
+        return False
 
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -152,7 +163,9 @@ def send_email(subject, body):
             server.sendmail(from_addr, [to_addr], msg.as_string())
         return True
     except Exception as e:
-        logging.warning("send_email failed: %s", e)
+        msg_text = f"send_email failed: {e}"
+        logging.warning(msg_text)
+        print(msg_text, file=sys.stderr)
         return False
 
 

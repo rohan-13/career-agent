@@ -192,6 +192,61 @@ def test_send_email_skips_when_gmail_app_password_unset(monkeypatch):
     mock_smtp.assert_not_called()
 
 
+def test_send_email_skip_path_prints_to_stderr(monkeypatch, capsys):
+    # Finding 1: a skipped send (unconfigured) must surface on stdout/stderr,
+    # not just via logging.warning (which career_agent.py routes to a file).
+    monkeypatch.delenv("GMAIL_APP_PASSWORD", raising=False)
+    monkeypatch.setenv("DIGEST_TO", "someone@example.com")
+
+    with patch("digest.smtplib.SMTP_SSL") as mock_smtp:
+        result = digest.send_email("subject", "body")
+
+    assert result is False
+    mock_smtp.assert_not_called()
+    err = capsys.readouterr().err
+    assert "GMAIL_APP_PASSWORD" in err
+    assert "skipping" in err.lower()
+
+
+def test_send_email_smtp_failure_prints_to_stderr(monkeypatch, capsys):
+    # Finding 1: an actual SMTP exception must also surface on stdout/stderr.
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "fake-app-password")
+    monkeypatch.setenv("DIGEST_TO", "someone@example.com")
+    monkeypatch.setenv("USER_EMAIL", "me@example.com")
+
+    with patch("digest.smtplib.SMTP_SSL", side_effect=OSError("network unreachable")):
+        result = digest.send_email("subject", "body")
+
+    assert result is False
+    err = capsys.readouterr().err
+    assert "send_email failed" in err
+    assert "network unreachable" in err
+
+
+def test_send_email_skips_when_user_email_unset(monkeypatch, capsys):
+    # Finding 2: without USER_EMAIL, send_email must NOT fall back to using
+    # the recipient's address as the SMTP login username -- it should skip
+    # the send attempt entirely, just like the password/recipient-unset case.
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "fake-app-password")
+    monkeypatch.setenv("DIGEST_TO", "someone@example.com")
+    monkeypatch.delenv("USER_EMAIL", raising=False)
+
+    mock_server = MagicMock()
+    mock_smtp_cm = MagicMock()
+    mock_smtp_cm.__enter__.return_value = mock_server
+
+    with patch("digest.smtplib.SMTP_SSL", return_value=mock_smtp_cm) as mock_smtp:
+        result = digest.send_email("subject", "body")
+
+    assert result is False
+    mock_smtp.assert_not_called()
+    mock_server.login.assert_not_called()
+
+    err = capsys.readouterr().err
+    assert "USER_EMAIL" in err
+    assert "skipping" in err.lower()
+
+
 def test_send_email_skips_when_digest_to_unset(monkeypatch):
     monkeypatch.setenv("GMAIL_APP_PASSWORD", "fake-app-password")
     monkeypatch.delenv("DIGEST_TO", raising=False)
@@ -217,6 +272,7 @@ def test_send_email_skips_when_both_unset(monkeypatch):
 def test_send_email_sends_via_smtp_ssl_when_configured(monkeypatch):
     monkeypatch.setenv("GMAIL_APP_PASSWORD", "fake-app-password")
     monkeypatch.setenv("DIGEST_TO", "someone@example.com")
+    monkeypatch.setenv("USER_EMAIL", "me@example.com")
 
     mock_server = MagicMock()
     mock_smtp_cm = MagicMock()
@@ -234,6 +290,7 @@ def test_send_email_sends_via_smtp_ssl_when_configured(monkeypatch):
 def test_send_email_returns_false_and_does_not_raise_on_smtp_error(monkeypatch):
     monkeypatch.setenv("GMAIL_APP_PASSWORD", "fake-app-password")
     monkeypatch.setenv("DIGEST_TO", "someone@example.com")
+    monkeypatch.setenv("USER_EMAIL", "me@example.com")
 
     with patch("digest.smtplib.SMTP_SSL", side_effect=OSError("network unreachable")):
         result = digest.send_email("subject", "body")
