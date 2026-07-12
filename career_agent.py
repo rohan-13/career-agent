@@ -2,6 +2,8 @@
 
 Modes:
   python career_agent.py                              # events pipeline (default)
+  python career_agent.py --events-only                # events pipeline (explicit)
+  python career_agent.py --jobs-only                  # job-posting + recruiter-discovery pipeline
   python career_agent.py --recruiter                  # discover recruiters at all target companies
   python career_agent.py --recruiter Google           # discover at specific company only
   python career_agent.py --outreach --scrape-only --id 3   # print recruiter's profile text for Claude to draft from
@@ -15,9 +17,19 @@ import sys
 
 import scraper
 import parser as event_parser
+import job_sources
+import linkedin_source
+import filters
+import digest
 
 LOG_FILE = pathlib.Path(__file__).parent / "logs" / "agent.log"
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# TTL guardrail for auto-triggered recruiter discovery: once a company has a
+# recruiters row younger than this, skip re-scraping LinkedIn for it. Keeps
+# recruiter discovery from firing every time a new job posting shows up for a
+# company we've already scraped recently.
+RECRUITER_DISCOVERY_TTL_DAYS = 30
 
 
 def present_for_approval(events):
@@ -64,6 +76,108 @@ def main():
         logging.info("Approved: %s | %s | %s", ev["company"], ev["title"], ev["url"])
 
 
+_LINKEDIN_STATUS_NOTES = {
+    "no-session": "LinkedIn: no session",
+    "throttled": "LinkedIn: throttled",
+    "checkpoint": "LinkedIn: checkpoint hit, aborted",
+    "error": "LinkedIn: error",
+}
+
+
+def _maybe_discover_recruiters(company):
+    """Auto-trigger recruiter discovery for `company`, throttled by a TTL.
+
+    Skips (no LinkedIn hit) if a `recruiters` row already exists for this
+    company within RECRUITER_DISCOVERY_TTL_DAYS, or if the company has no
+    known TARGET_COMPANIES entry (the known gap for newer ATS-only companies).
+    Otherwise runs discovery scoped to this single company and returns the
+    newly-added recruiter dicts (shaped for digest.run_digest).
+    """
+    import recruiter_finder
+
+    # first_seen is stored as SQLite CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS",
+    # UTC) -- format the cutoff identically so string comparison is valid.
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=RECRUITER_DISCOVERY_TTL_DAYS)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    con = recruiter_finder.init_db()
+    fresh = con.execute(
+        "SELECT 1 FROM recruiters WHERE company = ? AND first_seen >= ? LIMIT 1",
+        (company, cutoff),
+    ).fetchone()
+    con.close()
+
+    if fresh:
+        logging.info("Recruiter discovery skipped for %s: fresh (<%dd) recruiters row exists",
+                      company, RECRUITER_DISCOVERY_TTL_DAYS)
+        return []
+
+    matched = [c for c in recruiter_finder.TARGET_COMPANIES if c["name"].lower() == company.lower()]
+    if not matched:
+        logging.info("Recruiter discovery skipped for %s: no TARGET_COMPANIES entry (known gap)", company)
+        return []
+
+    n = recruiter_finder.discover_recruiters(companies=[matched[0]], max_per_company=10)
+    logging.info("Recruiter discovery for %s: %d new recruiter(s)", company, n)
+    if not n:
+        return []
+
+    con = recruiter_finder.init_db()
+    rows = con.execute(
+        "SELECT name, company, title, email, email_confidence, linkedin_url"
+        " FROM recruiters WHERE company = ? AND first_seen >= ?",
+        (company, cutoff),
+    ).fetchall()
+    con.close()
+
+    return [
+        {"name": r[0], "company": r[1], "title": r[2], "email": r[3],
+         "email_confidence": r[4], "linkedin_url": r[5]}
+        for r in rows
+    ]
+
+
+def run_jobs_pipeline():
+    """Fetch job postings (ATS boards + trackers + LinkedIn), filter to targets,
+    insert new ones, auto-trigger recruiter discovery per new-job company, and
+    send the digest. Returns (new_jobs, collected_recruiters)."""
+    logging.info("Jobs pipeline run started")
+    notes = []
+    all_jobs = []
+
+    try:
+        all_jobs += job_sources.fetch_ats_boards()
+    except Exception as e:
+        logging.warning("fetch_ats_boards failed: %s", e)
+
+    try:
+        all_jobs += job_sources.fetch_trackers()
+    except Exception as e:
+        logging.warning("fetch_trackers failed: %s", e)
+
+    li_jobs, li_status = linkedin_source.fetch_linkedin()
+    all_jobs += li_jobs
+    if li_status != "ok":
+        notes.append(_LINKEDIN_STATUS_NOTES.get(li_status, f"LinkedIn: {li_status}"))
+
+    targeted_jobs = [j for j in all_jobs if filters.is_target(j.get("title", ""), j.get("description", ""))]
+    for job in targeted_jobs:
+        job["match_score"] = filters.match_strength(job["title"])
+
+    new_jobs = job_sources.insert_jobs(targeted_jobs)
+    logging.info("Jobs pipeline: %d fetched, %d targeted, %d new", len(all_jobs), len(targeted_jobs), len(new_jobs))
+
+    companies = sorted({j["company"] for j in new_jobs if j.get("company")})
+    collected_recruiters = []
+    for company in companies:
+        collected_recruiters += _maybe_discover_recruiters(company)
+
+    digest.run_digest(new_jobs, new_recruiters=collected_recruiters, notes=notes)
+
+    return new_jobs, collected_recruiters
+
+
 def recruiter_mode(args):
     import recruiter_finder
 
@@ -101,5 +215,9 @@ if __name__ == "__main__":
     elif "--outreach" in args:
         remaining = [a for a in args if a != "--outreach"]
         outreach_mode(remaining)
+    elif "--jobs-only" in args:
+        run_jobs_pipeline()
+    elif "--events-only" in args:
+        main()
     else:
         main()

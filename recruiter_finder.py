@@ -50,6 +50,13 @@ TARGET_COMPANIES = [
     {"name": "Ramp",       "domain": "ramp.com",       "linkedin_slug": "ramp-financial"},
     {"name": "Plaid",      "domain": "plaid.com",      "linkedin_slug": "plaid-"},
     {"name": "LinkedIn",   "domain": "linkedin.com",   "linkedin_slug": "linkedin"},
+    # Task 4 incremental addition: highest-signal companies from Task 2's 15 new
+    # ATS boards (live-verified 2026-07-10 via unauthenticated HTTP HEAD checks).
+    # The remaining 11 new ATS companies are a known gap, left for later work.
+    {"name": "Databricks", "domain": "databricks.com", "linkedin_slug": "databricks"},
+    {"name": "Scale AI",   "domain": "scale.com",      "linkedin_slug": "scaleai"},
+    {"name": "Coinbase",   "domain": "coinbase.com",   "linkedin_slug": "coinbase"},
+    {"name": "Snowflake",  "domain": "snowflake.com",  "linkedin_slug": "snowflake-computing"},
 ]
 
 # Title substrings that mark a person as relevant to new-grad outreach
