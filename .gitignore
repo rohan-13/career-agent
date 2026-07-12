@@ -10,3 +10,4 @@ digests/
 __pycache__/
 *.pyc
 .venv/
+.superpowers/
