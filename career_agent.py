@@ -1,7 +1,17 @@
-"""Main orchestration: scrape -> parse -> dedupe -> approve -> register -> calendar -> log."""
+"""Main orchestration: scrape -> parse -> dedupe -> approve -> register -> calendar -> log.
+
+Modes:
+  python career_agent.py                              # events pipeline (default)
+  python career_agent.py --recruiter                  # discover recruiters at all target companies
+  python career_agent.py --recruiter Google           # discover at specific company only
+  python career_agent.py --outreach --scrape-only --id 3   # print recruiter's profile text for Claude to draft from
+  python career_agent.py --outreach --save-draft --id 3     # save a drafted email (piped via stdin) for recruiter id=3
+  python career_agent.py --list-recruiters            # print all discovered recruiters
+"""
 import datetime
 import logging
 import pathlib
+import sys
 
 import scraper
 import parser as event_parser
@@ -54,5 +64,42 @@ def main():
         logging.info("Approved: %s | %s | %s", ev["company"], ev["title"], ev["url"])
 
 
+def recruiter_mode(args):
+    import recruiter_finder
+
+    if "--list" in args or "--list-recruiters" in args:
+        recruiter_finder.list_recruiters()
+        return
+
+    company_filter = None
+    for arg in args:
+        if not arg.startswith("--"):
+            matches = [c for c in recruiter_finder.TARGET_COMPANIES if c["name"].lower() == arg.lower()]
+            if matches:
+                company_filter = matches
+                print(f"Filtering to: {matches[0]['name']}")
+            else:
+                print(f"Unknown company '{arg}'. Searching all companies.")
+
+    n = recruiter_finder.discover_recruiters(companies=company_filter)
+    logging.info("Recruiter discovery: %d new recruiters added", n)
+    recruiter_finder.list_recruiters()
+
+
+def outreach_mode(args):
+    import outreach, sys as _sys
+    _sys.argv = ["outreach.py"] + args
+    outreach.main()
+
+
 if __name__ == "__main__":
-    main()
+    args = sys.argv[1:]
+
+    if "--recruiter" in args or "--list-recruiters" in args:
+        remaining = [a for a in args if a not in ("--recruiter",)]
+        recruiter_mode(remaining)
+    elif "--outreach" in args:
+        remaining = [a for a in args if a != "--outreach"]
+        outreach_mode(remaining)
+    else:
+        main()

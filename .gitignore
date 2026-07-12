@@ -2,6 +2,7 @@
 credentials.json
 token.json
 .linkedin_session.json
+.linkedin_cookies.json
 .linkedin_last_run
 events.db
 data/raw/
