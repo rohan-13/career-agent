@@ -79,6 +79,22 @@ ATS_BOARDS = {
     "Notion": ("ashby", "notion"),
     "Ramp": ("ashby", "ramp"),
     "Plaid": ("ashby", "plaid"),     # verified 2026-06-11: moved from Lever to Ashby (Lever returns 0 jobs)
+    # Task 2 expansion: 15 new companies (live-verified 2026-07-10)
+    "Databricks": ("greenhouse", "databricks"),
+    "Scale AI": ("greenhouse", "scaleai"),
+    "Brex": ("greenhouse", "brex"),
+    "Coinbase": ("greenhouse", "coinbase"),
+    "Snowflake": ("ashby", "snowflake"),
+    "Confluent": ("ashby", "confluent"),
+    "MongoDB": ("greenhouse", "mongodb"),
+    "Asana": ("greenhouse", "asana"),
+    "Discord": ("greenhouse", "discord"),
+    "Affirm": ("greenhouse", "affirm"),
+    "Robinhood": ("greenhouse", "robinhood"),
+    "Instacart": ("greenhouse", "instacart"),
+    "Lyft": ("greenhouse", "lyft"),
+    "Pinterest": ("greenhouse", "pinterest"),
+    "Reddit": ("greenhouse", "reddit"),
 }
 
 
