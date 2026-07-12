@@ -11,18 +11,17 @@ Modes:
   python outreach.py --show-draft --id <N>        # print saved draft for recruiter N
 """
 import asyncio
-import json
-import os
 import pathlib
 import sqlite3
 import sys
 
 from dotenv import load_dotenv
 
+import linkedin_session
+
 load_dotenv(pathlib.Path(__file__).parent / ".env")
 
 DB_PATH = pathlib.Path(__file__).parent / "events.db"
-COOKIES_PATH = pathlib.Path(__file__).parent / ".linkedin_cookies.json"
 
 
 # ── LinkedIn scraping ──────────────────────────────────────────────────────────
@@ -34,58 +33,10 @@ async def _scrape_with_playwright(url):
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context(
             viewport={"width": 1280, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-            ),
+            user_agent=linkedin_session.USER_AGENT,
         )
 
-        if COOKIES_PATH.exists():
-            with open(COOKIES_PATH) as f:
-                await context.add_cookies(json.load(f))
-
-        page = await context.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=45000)
-
-        if any(x in page.url for x in ["login", "authwall", "signup"]):
-            email = os.getenv("LINKEDIN_EMAIL")
-            password = os.getenv("LINKEDIN_PASSWORD")
-
-            if email and password:
-                print("Auto-filling LinkedIn login...", file=sys.stderr)
-                await page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
-                email_sel = 'input#username, input[name="session_key"], input[autocomplete="username"]'
-                pass_sel  = 'input#password, input[name="session_password"], input[autocomplete="current-password"]'
-                await page.wait_for_selector(email_sel, state="attached", timeout=15000)
-                await page.fill(email_sel, email, force=True)
-                await page.fill(pass_sel, password, force=True)
-                await page.click('button[type="submit"]')
-                await page.wait_for_timeout(4000)
-
-                if any(x in page.url for x in ["checkpoint", "challenge", "login", "authwall"]):
-                    print(
-                        "LinkedIn triggered a verification step (2FA/CAPTCHA).\n"
-                        "Complete it in the browser window, then press Enter...",
-                        file=sys.stderr,
-                    )
-                    input()
-
-                with open(COOKIES_PATH, "w") as f:
-                    json.dump(await context.cookies(), f)
-                print("Cookies saved.", file=sys.stderr)
-            else:
-                print(
-                    "LinkedIn requires login. A browser window is open.\n"
-                    "Log in, then press Enter here to continue...\n"
-                    "Tip: add LINKEDIN_EMAIL and LINKEDIN_PASSWORD to .env for auto-login.",
-                    file=sys.stderr,
-                )
-                input()
-                with open(COOKIES_PATH, "w") as f:
-                    json.dump(await context.cookies(), f)
-                print("Cookies saved.", file=sys.stderr)
-
-            await page.goto(url, wait_until="networkidle", timeout=45000)
+        page = await linkedin_session.get_authenticated_page(context, url)
 
         for _ in range(3):
             await page.keyboard.press("End")

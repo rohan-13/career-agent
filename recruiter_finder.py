@@ -14,7 +14,6 @@ Usage:
 """
 
 import asyncio
-import json
 import os
 import pathlib
 import sqlite3
@@ -25,10 +24,11 @@ from urllib.parse import quote
 import requests
 from dotenv import load_dotenv
 
+import linkedin_session
+
 load_dotenv(pathlib.Path(__file__).parent / ".env")
 
 DB_PATH = pathlib.Path(__file__).parent / "events.db"
-COOKIES_PATH = pathlib.Path(__file__).parent / ".linkedin_cookies.json"
 
 TARGET_COMPANIES = [
     {"name": "Google",     "domain": "google.com",     "linkedin_slug": "google"},
@@ -61,11 +61,6 @@ _RECRUITER_KEYWORDS = [
 
 # LinkedIn company people-search terms (tried in order until we have enough results)
 _SEARCH_TERMS = ["recruiter", "university recruiting", "early career", "new grad"]
-
-_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-)
 
 # Well-documented email patterns for major companies.
 # {first} / {last} are lower-cased first/last name tokens.
@@ -125,66 +120,25 @@ async def _playwright_people(slug, search_terms, max_results):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(viewport={"width": 1280, "height": 900}, user_agent=_UA)
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900}, user_agent=linkedin_session.USER_AGENT
+        )
 
-        if COOKIES_PATH.exists():
-            context_cookies = json.loads(COOKIES_PATH.read_text())
-            await context.add_cookies(context_cookies)
-
-        page = await context.new_page()
         seen_urls: dict = {}
-        logged_in = False
+        page = None
 
         for term in search_terms:
             url = (
                 f"https://www.linkedin.com/company/{slug}/people/"
                 f"?keywords={quote(term)}"
             )
-            await page.goto(url, wait_until="networkidle", timeout=45000)
 
-            # Handle auth wall
-            if not logged_in and any(x in page.url for x in ["login", "authwall", "signup"]):
-                email = os.getenv("LINKEDIN_EMAIL")
-                password = os.getenv("LINKEDIN_PASSWORD")
-
-                if email and password:
-                    # Auto-fill login form
-                    print("  Auto-filling LinkedIn login...", file=sys.stderr)
-                    await page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
-                    email_sel = 'input#username, input[name="session_key"], input[autocomplete="username"]'
-                    pass_sel  = 'input#password, input[name="session_password"], input[autocomplete="current-password"]'
-                    await page.wait_for_selector(email_sel, state="attached", timeout=15000)
-                    await page.fill(email_sel, email, force=True)
-                    await page.fill(pass_sel, password, force=True)
-                    await page.click('button[type="submit"]')
-                    await page.wait_for_timeout(4000)
-
-                    # Handle 2FA or CAPTCHA — fall back to manual if still on auth page
-                    if any(x in page.url for x in ["checkpoint", "challenge", "login", "authwall"]):
-                        print(
-                            "  LinkedIn triggered a verification step (2FA/CAPTCHA).\n"
-                            "  Complete it in the browser window, then press Enter...",
-                            file=sys.stderr,
-                        )
-                        input()
-
-                    COOKIES_PATH.write_text(json.dumps(await context.cookies()))
-                    print("  Cookies saved.", file=sys.stderr)
-                    await page.goto(url, wait_until="networkidle", timeout=45000)
-
-                else:
-                    print(
-                        "\nLinkedIn requires login. A browser window is open.\n"
-                        "Log in, then press Enter here to continue...\n"
-                        "Tip: add LINKEDIN_EMAIL and LINKEDIN_PASSWORD to .env for auto-login.",
-                        file=sys.stderr,
-                    )
-                    input()
-                    COOKIES_PATH.write_text(json.dumps(await context.cookies()))
-                    print("  Cookies saved.", file=sys.stderr)
-                    await page.goto(url, wait_until="networkidle", timeout=45000)
-
-            logged_in = True
+            if page is None:
+                # First term: load cookies + handle auth wall via the shared helper.
+                page = await linkedin_session.get_authenticated_page(context, url)
+            else:
+                # Already authenticated this session — navigate directly.
+                await page.goto(url, wait_until="networkidle", timeout=45000)
 
             # Scroll to load lazy-rendered cards
             for _ in range(4):
