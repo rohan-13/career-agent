@@ -122,7 +122,7 @@ def _is_recruiter(title):
 
 # ── LinkedIn company people scraper (Playwright) ───────────────────────────────
 
-async def _playwright_people(slug, search_terms, max_results):
+async def _playwright_people(slug, search_terms, max_results, interactive=True):
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -142,7 +142,7 @@ async def _playwright_people(slug, search_terms, max_results):
 
             if page is None:
                 # First term: load cookies + handle auth wall via the shared helper.
-                page = await linkedin_session.get_authenticated_page(context, url)
+                page = await linkedin_session.get_authenticated_page(context, url, interactive=interactive)
             else:
                 # Already authenticated this session — navigate directly.
                 await page.goto(url, wait_until="networkidle", timeout=45000)
@@ -208,10 +208,12 @@ async def _playwright_people(slug, search_terms, max_results):
         return list(seen_urls.values())[:max_results]
 
 
-def scrape_company_people(linkedin_slug, max_results=15):
+def scrape_company_people(linkedin_slug, max_results=15, interactive=True):
     """Return list of {name, title, url} dicts from LinkedIn company people search."""
     try:
-        people = asyncio.run(_playwright_people(linkedin_slug, _SEARCH_TERMS, max_results))
+        people = asyncio.run(
+            _playwright_people(linkedin_slug, _SEARCH_TERMS, max_results, interactive=interactive)
+        )
     except Exception as e:
         print(f"    Playwright error: {e}")
         return []
@@ -285,8 +287,15 @@ def generate_email(name, domain, hunter_pattern=None):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def discover_recruiters(companies=None, max_per_company=10):
-    """Scrape LinkedIn company people pages and upsert results into events.db."""
+def discover_recruiters(companies=None, max_per_company=10, interactive=True):
+    """Scrape LinkedIn company people pages and upsert results into events.db.
+
+    `interactive=False` (used by the automated `career_agent._maybe_discover_recruiters`
+    path) is threaded down through `scrape_company_people`/`_playwright_people` to
+    `linkedin_session.get_authenticated_page`, so an unattended run never blocks on
+    an `input()` login/2FA prompt. The manual `--recruiter` CLI path keeps the
+    default `interactive=True` since a human is present to complete that prompt.
+    """
     api_key = os.getenv("HUNTER_API_KEY") or None
     companies = companies or TARGET_COMPANIES
     con = init_db()
@@ -300,7 +309,7 @@ def discover_recruiters(companies=None, max_per_company=10):
 
         print(f"\n── {cname} (linkedin.com/company/{slug}) ──")
 
-        people = scrape_company_people(slug, max_results=max_per_company)
+        people = scrape_company_people(slug, max_results=max_per_company, interactive=interactive)
         print(f"  {len(people)} candidate(s) found")
 
         # Fetch Hunter domain pattern once per company

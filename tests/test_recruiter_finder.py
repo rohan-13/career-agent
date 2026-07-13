@@ -111,7 +111,7 @@ def test_scrape_company_people_filters_to_recruiter_titles(monkeypatch):
         {"name": "John Smith", "title": "Software Engineer", "url": "https://linkedin.com/in/johnsmith"},
     ]
 
-    async def fake_playwright_people(slug, search_terms, max_results):
+    async def fake_playwright_people(slug, search_terms, max_results, interactive=True):
         return canned
 
     monkeypatch.setattr(recruiter_finder, "_playwright_people", fake_playwright_people)
@@ -125,7 +125,7 @@ def test_scrape_company_people_falls_back_to_all_when_no_recruiter_titles(monkey
         {"name": "John Smith", "title": "Software Engineer", "url": "https://linkedin.com/in/johnsmith"},
     ]
 
-    async def fake_playwright_people(slug, search_terms, max_results):
+    async def fake_playwright_people(slug, search_terms, max_results, interactive=True):
         return canned
 
     monkeypatch.setattr(recruiter_finder, "_playwright_people", fake_playwright_people)
@@ -135,7 +135,7 @@ def test_scrape_company_people_falls_back_to_all_when_no_recruiter_titles(monkey
 
 
 def test_scrape_company_people_returns_empty_on_playwright_error(monkeypatch):
-    async def raising_playwright_people(slug, search_terms, max_results):
+    async def raising_playwright_people(slug, search_terms, max_results, interactive=True):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(recruiter_finder, "_playwright_people", raising_playwright_people)
@@ -153,7 +153,7 @@ def test_discover_recruiters_inserts_new_rows(tmp_path, monkeypatch):
 
     canned = [{"name": "Jane Doe", "title": "Technical Recruiter", "url": "https://linkedin.com/in/janedoe"}]
 
-    def fake_scrape_company_people(slug, max_results=10):
+    def fake_scrape_company_people(slug, max_results=10, interactive=True):
         return canned
 
     monkeypatch.setattr(recruiter_finder, "scrape_company_people", fake_scrape_company_people)
@@ -175,7 +175,7 @@ def test_discover_recruiters_does_not_duplicate_on_rerun(tmp_path, monkeypatch):
     monkeypatch.delenv("HUNTER_API_KEY", raising=False)
 
     canned = [{"name": "Jane Doe", "title": "Technical Recruiter", "url": "https://linkedin.com/in/janedoe"}]
-    monkeypatch.setattr(recruiter_finder, "scrape_company_people", lambda slug, max_results=10: canned)
+    monkeypatch.setattr(recruiter_finder, "scrape_company_people", lambda slug, max_results=10, interactive=True: canned)
     monkeypatch.setattr(recruiter_finder.time, "sleep", lambda *_: None)
 
     companies = [{"name": "Google", "domain": "google.com", "linkedin_slug": "google"}]
@@ -195,7 +195,7 @@ def test_discover_recruiters_uses_hunter_email_when_api_key_present(tmp_path, mo
     monkeypatch.setenv("HUNTER_API_KEY", "fake-key")
 
     canned = [{"name": "Jane Doe", "title": "Technical Recruiter", "url": "https://linkedin.com/in/janedoe"}]
-    monkeypatch.setattr(recruiter_finder, "scrape_company_people", lambda slug, max_results=10: canned)
+    monkeypatch.setattr(recruiter_finder, "scrape_company_people", lambda slug, max_results=10, interactive=True: canned)
     monkeypatch.setattr(recruiter_finder, "hunter_domain_pattern", lambda domain, api_key: None)
     monkeypatch.setattr(recruiter_finder, "hunter_find_email", lambda first, last, domain, api_key: ("jane.doe@hunter-verified.com", "95"))
     monkeypatch.setattr(recruiter_finder.time, "sleep", lambda *_: None)
@@ -208,3 +208,33 @@ def test_discover_recruiters_uses_hunter_email_when_api_key_present(tmp_path, mo
     con.close()
     assert email == "jane.doe@hunter-verified.com"
     assert conf == "95"
+
+
+def test_discover_recruiters_defaults_interactive_true_but_threads_false_when_passed(tmp_path, monkeypatch):
+    """The manual `--recruiter` CLI path calls discover_recruiters() without an
+    `interactive` kwarg and must keep behaving as an interactive (human-present)
+    run by default. The automated career_agent path explicitly passes
+    interactive=False -- confirm discover_recruiters() threads whatever it's
+    given straight through to scrape_company_people()."""
+    db_path = tmp_path / "test.db"
+    monkeypatch.setattr(recruiter_finder, "DB_PATH", db_path)
+    monkeypatch.delenv("HUNTER_API_KEY", raising=False)
+
+    captured = []
+
+    def fake_scrape_company_people(slug, max_results=10, interactive=True):
+        captured.append(interactive)
+        return []
+
+    monkeypatch.setattr(recruiter_finder, "scrape_company_people", fake_scrape_company_people)
+    monkeypatch.setattr(recruiter_finder.time, "sleep", lambda *_: None)
+
+    companies = [{"name": "Google", "domain": "google.com", "linkedin_slug": "google"}]
+
+    # Manual-CLI-style call: no interactive kwarg passed -> defaults to True.
+    recruiter_finder.discover_recruiters(companies=companies, max_per_company=10)
+    assert captured[-1] is True
+
+    # Automated career_agent-style call: explicit interactive=False must be threaded through.
+    recruiter_finder.discover_recruiters(companies=companies, max_per_company=10, interactive=False)
+    assert captured[-1] is False

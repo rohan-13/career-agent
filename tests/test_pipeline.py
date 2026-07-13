@@ -179,6 +179,54 @@ def test_run_jobs_pipeline_note_per_status(monkeypatch, tmp_path, status, expect
     assert captured["notes"] == [expected_note]
 
 
+# ── run_jobs_pipeline: exception isolation across companies ────────────────
+
+def test_run_jobs_pipeline_isolates_per_company_recruiter_discovery_failure(monkeypatch, tmp_path):
+    """One company's _maybe_discover_recruiters raising must not abort the loop
+    early or prevent digest.run_digest from running -- mirrors the try/except
+    isolation already used around fetch_ats_boards()/fetch_trackers()."""
+    good_a = _job(title="Software Engineer, New Grad", url="https://a.example.com/jobs/1", company="Alpha")
+    bad = _job(title="Software Engineer, New Grad", url="https://b.example.com/jobs/1", company="Beta")
+    good_c = _job(title="Software Engineer, New Grad", url="https://c.example.com/jobs/1", company="Gamma")
+
+    monkeypatch.setattr(career_agent.job_sources, "fetch_ats_boards", lambda: [good_a, bad, good_c])
+    monkeypatch.setattr(career_agent.job_sources, "fetch_trackers", lambda: [])
+    monkeypatch.setattr(career_agent.linkedin_source, "fetch_linkedin", lambda: ([], "ok"))
+
+    def fake_insert_jobs(jobs, db_path=None):
+        return _REAL_INSERT_JOBS(jobs, db_path=tmp_path / "events.db")
+
+    monkeypatch.setattr(career_agent.job_sources, "insert_jobs", fake_insert_jobs)
+
+    def fake_maybe_discover(company):
+        if company == "Beta":
+            raise RuntimeError("boom: LinkedIn blew up for Beta")
+        return [{"name": f"Recruiter at {company}", "company": company, "title": "Technical Recruiter",
+                  "email": None, "email_confidence": None, "linkedin_url": None}]
+
+    monkeypatch.setattr(career_agent, "_maybe_discover_recruiters", fake_maybe_discover)
+
+    captured = {}
+
+    def fake_run_digest(new_jobs, new_recruiters=(), notes=(), db_path=None):
+        captured["called"] = True
+        captured["new_jobs"] = list(new_jobs)
+        captured["recruiters"] = list(new_recruiters)
+
+    monkeypatch.setattr(career_agent.digest, "run_digest", fake_run_digest)
+
+    new_jobs, recruiters = career_agent.run_jobs_pipeline()
+
+    # digest.run_digest must still run despite Beta's exception.
+    assert captured.get("called") is True
+    # Alpha and Gamma's recruiters were still collected; Beta's failure just skipped Beta.
+    names = {r["name"] for r in recruiters}
+    assert names == {"Recruiter at Alpha", "Recruiter at Gamma"}
+    # All three companies' jobs were still inserted/returned.
+    companies = {j["company"] for j in new_jobs}
+    assert companies == {"Alpha", "Beta", "Gamma"}
+
+
 # ── _maybe_discover_recruiters ──────────────────────────────────────────────
 
 def test_maybe_discover_recruiters_skips_when_fresh_row_exists(monkeypatch, tmp_path):
@@ -205,7 +253,7 @@ def test_maybe_discover_recruiters_triggers_when_no_existing_rows(monkeypatch, t
     db_path = tmp_path / "events.db"
     monkeypatch.setattr(recruiter_finder, "DB_PATH", db_path)
 
-    def fake_discover_recruiters(companies=None, max_per_company=10):
+    def fake_discover_recruiters(companies=None, max_per_company=10, interactive=True):
         assert companies == [{"name": "Google", "domain": "google.com", "linkedin_slug": "google"}]
         # Simulate discover_recruiters' real side effect: it upserts rows itself.
         _insert_recruiter_row(db_path, "Google", name="Jane Doe")
@@ -224,6 +272,29 @@ def test_maybe_discover_recruiters_triggers_when_no_existing_rows(monkeypatch, t
         assert r["company"] == "Google"
 
 
+def test_maybe_discover_recruiters_calls_discover_recruiters_with_interactive_false(monkeypatch, tmp_path):
+    """The automated path must never risk blocking on input() in an unattended
+    cron run -- discover_recruiters() must be called with interactive=False."""
+    db_path = tmp_path / "events.db"
+    monkeypatch.setattr(recruiter_finder, "DB_PATH", db_path)
+
+    captured_kwargs = {}
+
+    def fake_discover_recruiters(companies=None, max_per_company=10, interactive=True):
+        captured_kwargs["companies"] = companies
+        captured_kwargs["max_per_company"] = max_per_company
+        captured_kwargs["interactive"] = interactive
+        return 0
+
+    monkeypatch.setattr(recruiter_finder, "discover_recruiters", fake_discover_recruiters)
+
+    career_agent._maybe_discover_recruiters("Google")
+
+    assert captured_kwargs["companies"] == [{"name": "Google", "domain": "google.com", "linkedin_slug": "google"}]
+    assert captured_kwargs["max_per_company"] == 10
+    assert captured_kwargs["interactive"] is False
+
+
 def test_maybe_discover_recruiters_triggers_when_only_stale_rows(monkeypatch, tmp_path):
     db_path = tmp_path / "events.db"
     monkeypatch.setattr(recruiter_finder, "DB_PATH", db_path)
@@ -232,7 +303,7 @@ def test_maybe_discover_recruiters_triggers_when_only_stale_rows(monkeypatch, tm
     _insert_recruiter_row(db_path, "Google", name="Old Recruiter", first_seen=stale_ts)
     _insert_check_row(db_path, "Google", stale_ts)
 
-    def fake_discover_recruiters(companies=None, max_per_company=10):
+    def fake_discover_recruiters(companies=None, max_per_company=10, interactive=True):
         _insert_recruiter_row(db_path, "Google", name="New Recruiter")
         return 1
 
@@ -261,7 +332,7 @@ def test_maybe_discover_recruiters_returns_empty_when_discover_finds_nothing_new
     db_path = tmp_path / "events.db"
     monkeypatch.setattr(recruiter_finder, "DB_PATH", db_path)
 
-    monkeypatch.setattr(recruiter_finder, "discover_recruiters", lambda companies=None, max_per_company=10: 0)
+    monkeypatch.setattr(recruiter_finder, "discover_recruiters", lambda companies=None, max_per_company=10, interactive=True: 0)
 
     result = career_agent._maybe_discover_recruiters("Google")
     assert result == []
@@ -290,7 +361,7 @@ def test_maybe_discover_recruiters_stable_roster_stays_throttled_after_zero_new(
 
     calls = {"n": 0}
 
-    def fake_discover_recruiters(companies=None, max_per_company=10):
+    def fake_discover_recruiters(companies=None, max_per_company=10, interactive=True):
         calls["n"] += 1
         return 0  # stable roster: nothing new found, but a check DID happen
 

@@ -154,7 +154,7 @@ def _maybe_discover_recruiters(company):
         logging.info("Recruiter discovery skipped for %s: no TARGET_COMPANIES entry (known gap)", company)
         return []
 
-    n = recruiter_finder.discover_recruiters(companies=[matched[0]], max_per_company=10)
+    n = recruiter_finder.discover_recruiters(companies=[matched[0]], max_per_company=10, interactive=False)
     logging.info("Recruiter discovery for %s: %d new recruiter(s)", company, n)
 
     # Record the attempt unconditionally -- even 0 new recruiters means we
@@ -220,7 +220,10 @@ def run_jobs_pipeline():
     companies = sorted({j["company"] for j in new_jobs if j.get("company")})
     collected_recruiters = []
     for company in companies:
-        collected_recruiters += _maybe_discover_recruiters(company)
+        try:
+            collected_recruiters += _maybe_discover_recruiters(company)
+        except Exception as e:
+            logging.warning("Recruiter discovery failed for %s: %s", company, e)
 
     digest.run_digest(new_jobs, new_recruiters=collected_recruiters, notes=notes)
 
