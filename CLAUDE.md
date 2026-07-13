@@ -249,6 +249,140 @@ def add_to_calendar(event):
 
 ---
 
+## Phase 6 — Job-Posting Pipeline
+
+In addition to career *events*, the agent tracks new-grad/entry-level *job postings* directly, via `job_sources.py`, `linkedin_source.py`, and `filters.py`, orchestrated by `career_agent.py`'s `run_jobs_pipeline()`.
+
+### Sources
+
+1. **ATS boards** (`job_sources.fetch_ats_boards()`) — structured JSON APIs, no LLM parsing needed. `job_sources.ATS_BOARDS` currently covers **23 companies** across three ATS providers (Greenhouse, Lever, Ashby): Stripe, Airbnb, OpenAI, Anthropic, Figma, Notion, Ramp, Plaid, Databricks, Scale AI, Brex, Coinbase, Snowflake, Confluent, MongoDB, Asana, Discord, Affirm, Robinhood, Instacart, Lyft, Pinterest, Reddit. Each entry maps `company -> (ats, slug)`; `posted_date` semantics differ by provider (Greenhouse = `updated_at`, bumps on edits; Ashby = `publishedAt`; Lever = `createdAt`, UTC).
+2. **GitHub new-grad tracker** (`job_sources.fetch_trackers()`) — parses the `SimplifyJobs/New-Grad-Positions` README's HTML `<tr><td>` table format (`job_sources.TRACKER_REPOS["simplify"]`).
+3. **LinkedIn job search** (`linkedin_source.fetch_linkedin()`) — covers FAANG and any other company without a public ATS API (Google, Apple, Amazon, Meta, Microsoft, etc.) by scraping LinkedIn's logged-in job-search results. This is the ToS-sensitive path — see the dedicated **LinkedIn ToS & Risk** subsection under "Recruiter Discovery & Outreach" below for the full mitigation list (12h throttle, 40-page cap, randomized delays, abort-on-checkpoint); `fetch_linkedin()`'s docstring documents the 5 possible status values (`ok`, `no-session`, `throttled`, `checkpoint`, `error`).
+
+Every fetched posting is run through `filters.is_target()` (title/description regex matching for new-grad + target-role signals) before being treated as a match; `filters.match_strength()` then scores it 0-3 for digest ranking.
+
+### `jobs` table (in `events.db`)
+
+Created by `job_sources.init_jobs_table()`:
+
+```sql
+CREATE TABLE jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT, company TEXT, location TEXT,
+    url TEXT UNIQUE,
+    source TEXT, posted_date TEXT,
+    match_score INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'new',
+    first_seen TEXT DEFAULT CURRENT_TIMESTAMP
+)
+```
+
+Dedup is two-layer (`job_sources.insert_jobs()`): exact `url` match, then a fuzzy `token_sort_ratio >= 85` title match within the same company (catches cross-source title variants like "Software Engineer, New Grad" vs "... New Grad (2027)").
+
+**Status lifecycle:** `new` (just inserted) → `digested` (flipped by `digest.run_digest()` after it writes/emails the digest containing that job — see `digest.py`'s final `UPDATE jobs SET status = 'digested' WHERE url = ?` step).
+
+### Digest output
+
+`digest.run_digest()` renders a ranked markdown digest (jobs table + recruiters-by-company table) to `digests/jobs-YYYY-MM-DD.md` and emails it (see "Env vars / credentials" below for what's required to actually send the email — email send is skipped gracefully, not fatal, if unconfigured). `digests/` is gitignored.
+
+### Running standalone
+
+```
+python career_agent.py --jobs-only     # job-posting + recruiter-discovery pipeline
+python career_agent.py --events-only   # original events-only pipeline (Phases 1-5)
+python career_agent.py                 # same as --events-only (default when no flag given)
+```
+
+---
+
+## Recruiter Discovery & Outreach
+
+Beyond job postings, the agent can find and draft outreach to technical/university recruiters at target companies, via `recruiter_finder.py` and `outreach.py`.
+
+### What it does
+
+1. **LinkedIn people-search scraping** (`recruiter_finder.scrape_company_people()`) — Playwright loads a target company's LinkedIn `/people/` page filtered by recruiter-relevant search terms (`recruiter`, `university recruiting`, `early career`, `new grad`), extracts name/title/profile-URL cards, and keeps only ones whose title matches recruiter keywords (falls back to all results if none match).
+2. **Email resolution**, per person found:
+   - If `HUNTER_API_KEY` is set: Hunter.io's `/email-finder` API for a verified email, or its `/domain-search` pattern as a per-company fallback.
+   - Otherwise: `recruiter_finder._DOMAIN_PATTERNS`' known email pattern for that company's domain, or a generic `{first}.{last}@{domain}` guess.
+
+### `recruiters` table (in `events.db`)
+
+Created by `recruiter_finder.init_db()`:
+
+```sql
+CREATE TABLE recruiters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    company TEXT,
+    title TEXT,
+    email TEXT,
+    email_confidence TEXT,
+    linkedin_url TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'discovered',
+    email_draft TEXT,
+    first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company, name)
+)
+```
+
+`recruiter_finder.TARGET_COMPANIES` currently lists **23 companies** (19 original + 4 added: Databricks, Scale AI, Coinbase, Snowflake — the remaining new ATS companies from Phase 6 are a known coverage gap, left for later work). This list is separate from `job_sources.ATS_BOARDS` and doesn't need to match it 1:1.
+
+### Automatic trigger (30-day TTL)
+
+`run_jobs_pipeline()` calls `career_agent._maybe_discover_recruiters(company)` once per distinct company among that run's newly-inserted jobs. This is throttled by a **separate bookkeeping table**, `recruiter_checks` (company TEXT PRIMARY KEY, last_attempted TEXT) — created by `career_agent._init_recruiter_checks_table()` — which is distinct from the `recruiters` table itself:
+
+- `recruiter_checks` tracks "when did we last *attempt* LinkedIn discovery for this company," updated unconditionally after every `discover_recruiters()` call, regardless of how many rows it inserted (or found zero).
+- This is deliberately independent of `recruiters.first_seen`, which only reflects when a specific recruiter row was first inserted (an `INSERT OR IGNORE` against `UNIQUE(company, name)` silently no-ops on repeat finds for a stable recruiting roster).
+- Net effect: a company is not re-scraped via LinkedIn more than once per `RECRUITER_DISCOVERY_TTL_DAYS` (30 days), **regardless of whether new recruiters are found**, no matter how many new job postings show up for that company in between.
+
+### Manual entry points
+
+```
+python career_agent.py --recruiter               # discover recruiters at all target companies
+python career_agent.py --recruiter Google        # discover at one company only
+python career_agent.py --list-recruiters         # print all discovered recruiters
+
+# Two-step outreach flow (Claude Code does the drafting; no ANTHROPIC_API_KEY needed in outreach.py):
+python career_agent.py --outreach --scrape-only --id 3   # scrape recruiter id=3's LinkedIn profile, print text to stdout
+python career_agent.py --outreach --save-draft --id 3     # pipe a drafted email via stdin, save it against recruiter id=3
+```
+
+(`recruiter_finder.py` and `outreach.py` can also be invoked directly — see each file's module docstring for their standalone CLI forms.)
+
+### LinkedIn ToS & Risk — READ BEFORE RUNNING
+
+> **This feature automates logged-in access to LinkedIn, which is a violation of LinkedIn's Terms of Service.** The user has explicitly reviewed and accepted this risk for their own personal LinkedIn account. Do not extend this automation to scrape on behalf of anyone else's account without the same explicit sign-off.
+
+Mitigations in place (all load-bearing, not decorative — do not loosen any of these for convenience without re-evaluating the risk):
+
+- **Session-cookie reuse instead of repeated logins** — `linkedin_session.get_authenticated_page()` persists cookies to `.linkedin_cookies.json` and reuses them, only falling back to a fresh login (auto-fill or manual+2FA) when the saved session is rejected.
+- **Randomized delays between navigations** — `linkedin_source.py` pauses 3-8s (`PAUSE_RANGE_SECONDS`) between page loads within a run.
+- **40-page-load cap per run** — `linkedin_source.MAX_PAGE_LOADS`; `_fetch()` aborts once reached.
+- **12-hour minimum gap between LinkedIn job-search runs** — `linkedin_source.MIN_INTERVAL_HOURS`, enforced by `allowed_to_run()` / `.linkedin_last_run`.
+- **Immediate, no-retry abort on any CAPTCHA/checkpoint/login-wall redirect** — `linkedin_session.is_checkpoint_url()`; hit anywhere in `linkedin_source._fetch()` or during `_perform_login()`, the run stops rather than retrying.
+- **30-day per-company recruiter-rescrape throttle** — the `recruiter_checks` mechanism described above, which bounds how often `recruiter_finder.py`'s people-search scraping hits a given company's LinkedIn page.
+
+**These mitigations reduce, but do not eliminate, the risk of LinkedIn account restriction.** Treat any checkpoint/CAPTCHA hit as a signal to stop and investigate, not to retry.
+
+See also `CLAUDE.md`'s "Notes for Claude Code" section (bottom of this file) for the manual-smoke-test command and checklist to run before relying on any of this LinkedIn-driving code in production — none of it is covered by automated tests.
+
+---
+
+## Env vars / credentials
+
+In addition to the Phase 1-5 `.env` vars documented above, the job-posting and recruiter-discovery features depend on:
+
+- **`LINKEDIN_EMAIL`** / **`LINKEDIN_PASSWORD`** — optional. If both are set, `linkedin_session._perform_login()` auto-fills LinkedIn's login form. If unset (or if auto-login hits a CAPTCHA/2FA step), the first run pauses for manual login + any 2FA in a visible browser window, then persists the session to `.linkedin_cookies.json` for reuse on subsequent runs.
+- **`HUNTER_API_KEY`** — optional. Enables Hunter.io email lookup/pattern discovery in `recruiter_finder.py`. Without it, email resolution falls back to `recruiter_finder._DOMAIN_PATTERNS`' known per-company pattern, or a generic `{first}.{last}@{domain}` guess.
+- **`GMAIL_APP_PASSWORD`** / **`DIGEST_TO`** — required for `digest.send_email()` to actually send the job digest email; without both set, `run_digest()` still writes `digests/jobs-YYYY-MM-DD.md` but skips the email send (logged as a warning, not fatal). To generate a Gmail app password: Google Account → Security → 2-Step Verification → App passwords → generate one for "Mail," then set `GMAIL_APP_PASSWORD` to the generated 16-character value.
+- **`USER_EMAIL`** — already documented above (Phase 4); reused as-is by `digest.send_email()` as the SMTP login username and `From` address (not a new/separate var — do not add a second email var for this).
+
+**`.linkedin_cookies.json`** is gitignored (see `.gitignore`) and must never be committed — it holds a live LinkedIn session.
+
+---
+
 ## Project File Structure
 
 ```
@@ -259,10 +393,18 @@ career-agent/
 ├── career_agent.py            ← main orchestration script
 ├── scraper.py                 ← Phase 2 scraping logic
 ├── parser.py                  ← Phase 3 Claude parsing logic
+├── filters.py                 ← new-grad/entry-level targeting filters (jobs + LinkedIn search)
 ├── register.py                ← Phase 4 registration logic
 ├── calendar_sync.py           ← Phase 5 Google Calendar logic
-├── events.db                  ← SQLite store (auto-created)
+├── job_sources.py             ← Phase 6: ATS boards + GitHub tracker fetchers, `jobs` table
+├── linkedin_session.py        ← shared LinkedIn login/cookie-session handling
+├── linkedin_source.py         ← Phase 6: LinkedIn job-search fetcher (throttled, ToS-sensitive)
+├── digest.py                  ← job+recruiter digest: scoring, markdown rendering, email delivery
+├── recruiter_finder.py        ← recruiter discovery: LinkedIn people-search + Hunter/pattern email resolution
+├── outreach.py                ← recruiter profile scraping + outreach draft storage (two-step CLI)
+├── events.db                  ← SQLite store (auto-created; events + jobs + recruiters + recruiter_checks tables)
 ├── requirements.txt
+├── digests/                   ← generated job digests, jobs-YYYY-MM-DD.md (gitignored)
 └── logs/
     └── agent.log
 ```
