@@ -84,32 +84,68 @@ _LINKEDIN_STATUS_NOTES = {
 }
 
 
+def _init_recruiter_checks_table(con):
+    """Create the `recruiter_checks` bookkeeping table if absent.
+
+    This is separate from (and does NOT touch) recruiter_finder.py's
+    `recruiters` table/schema. It tracks "when did we last ATTEMPT LinkedIn
+    discovery for this company" -- updated unconditionally after every call
+    to discover_recruiters(), regardless of how many rows it inserted. This
+    is intentionally distinct from `recruiters.first_seen`, which only
+    reflects when a specific recruiter row was first inserted and is never
+    touched again (INSERT OR IGNORE no-ops on repeat finds).
+    """
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS recruiter_checks (
+            company TEXT PRIMARY KEY,
+            last_attempted TEXT
+        )"""
+    )
+    con.commit()
+
+
 def _maybe_discover_recruiters(company):
     """Auto-trigger recruiter discovery for `company`, throttled by a TTL.
 
-    Skips (no LinkedIn hit) if a `recruiters` row already exists for this
-    company within RECRUITER_DISCOVERY_TTL_DAYS, or if the company has no
-    known TARGET_COMPANIES entry (the known gap for newer ATS-only companies).
-    Otherwise runs discovery scoped to this single company and returns the
-    newly-added recruiter dicts (shaped for digest.run_digest).
+    Skips (no LinkedIn hit) if this company was already CHECKED -- a
+    discovery attempt made, successful or not -- within
+    RECRUITER_DISCOVERY_TTL_DAYS, tracked in the `recruiter_checks` table.
+    This is deliberately independent of whether `recruiters` gained any new
+    rows: discover_recruiters() writes via `INSERT OR IGNORE` against a
+    `UNIQUE(company, name)` constraint, so re-scraping a company with a
+    stable recruiting roster (the common case) finds the same people every
+    time and silently no-ops on every row -- `first_seen` is only set at
+    insertion and never refreshed. Keying the throttle off
+    `recruiters.first_seen` alone would only catch a company's very first
+    successful discovery; every new job posting after that would re-trigger
+    a live LinkedIn scrape, defeating the 30-day throttle the user requires
+    to keep this ToS-violating automation within an accepted risk boundary.
+
+    Also skips if the company has no known TARGET_COMPANIES entry (the known
+    gap for newer ATS-only companies). Otherwise runs discovery scoped to
+    this single company, unconditionally records the check attempt (even if
+    zero new recruiters were found), and returns the newly-added recruiter
+    dicts (shaped for digest.run_digest).
     """
     import recruiter_finder
 
-    # first_seen is stored as SQLite CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS",
-    # UTC) -- format the cutoff identically so string comparison is valid.
-    cutoff = (
-        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=RECRUITER_DISCOVERY_TTL_DAYS)
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    # first_seen / last_attempted are both stored as SQLite CURRENT_TIMESTAMP
+    # ("YYYY-MM-DD HH:MM:SS", UTC) -- format `now`/the cutoff identically so
+    # string comparison stays valid across both tables.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (now - datetime.timedelta(days=RECRUITER_DISCOVERY_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
 
     con = recruiter_finder.init_db()
+    _init_recruiter_checks_table(con)
     fresh = con.execute(
-        "SELECT 1 FROM recruiters WHERE company = ? AND first_seen >= ? LIMIT 1",
+        "SELECT 1 FROM recruiter_checks WHERE company = ? AND last_attempted >= ? LIMIT 1",
         (company, cutoff),
     ).fetchone()
     con.close()
 
     if fresh:
-        logging.info("Recruiter discovery skipped for %s: fresh (<%dd) recruiters row exists",
+        logging.info("Recruiter discovery skipped for %s: checked <%dd ago (recruiter_checks)",
                       company, RECRUITER_DISCOVERY_TTL_DAYS)
         return []
 
@@ -120,6 +156,19 @@ def _maybe_discover_recruiters(company):
 
     n = recruiter_finder.discover_recruiters(companies=[matched[0]], max_per_company=10)
     logging.info("Recruiter discovery for %s: %d new recruiter(s)", company, n)
+
+    # Record the attempt unconditionally -- even 0 new recruiters means we
+    # just checked LinkedIn for this company and must not check again for
+    # RECRUITER_DISCOVERY_TTL_DAYS, no matter how many new jobs show up.
+    con = recruiter_finder.init_db()
+    _init_recruiter_checks_table(con)
+    con.execute(
+        "INSERT OR REPLACE INTO recruiter_checks (company, last_attempted) VALUES (?, ?)",
+        (company, now_str),
+    )
+    con.commit()
+    con.close()
+
     if not n:
         return []
 
