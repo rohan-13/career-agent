@@ -37,6 +37,7 @@ Search the following on Instagram, TikTok, YouTube, and X:
 - `"[Company] early career event"`
 - `"[Company] new grad 2027"` / `"new grad 2027 SWE"` / `"data science new grad"`
 - `"[Company] university recruiting"` / `"new grad applications open"`
+- `"[Company] 2027 start date"` / `"software engineer 2027 start date"` — catches postings phrased around a start date/cohort year rather than "new grad"/"entry level"
 - Hashtags: `#techjobs`, `#techhiring`, `#softwareengineer`, `#careersintech`, `#[Company]careers`, `#newgrad`, `#classof2027`
 
 Companies to always include: Google, Apple, Amazon, Meta, Microsoft, Uber, Stripe, Nike, Netflix, Airbnb, Salesforce, LinkedIn, Snap, Spotify, OpenAI, Anthropic, Figma, Notion, Ramp, Plaid.
@@ -256,7 +257,7 @@ In addition to career *events*, the agent tracks new-grad/entry-level *job posti
 ### Sources
 
 1. **ATS boards** (`job_sources.fetch_ats_boards()`) — structured JSON APIs, no LLM parsing needed. `job_sources.ATS_BOARDS` currently covers **23 companies** across three ATS providers (Greenhouse, Lever, Ashby): Stripe, Airbnb, OpenAI, Anthropic, Figma, Notion, Ramp, Plaid, Databricks, Scale AI, Brex, Coinbase, Snowflake, Confluent, MongoDB, Asana, Discord, Affirm, Robinhood, Instacart, Lyft, Pinterest, Reddit. Each entry maps `company -> (ats, slug)`; `posted_date` semantics differ by provider (Greenhouse = `updated_at`, bumps on edits; Ashby = `publishedAt`; Lever = `createdAt`, UTC).
-2. **GitHub new-grad tracker** (`job_sources.fetch_trackers()`) — parses the `SimplifyJobs/New-Grad-Positions` README's HTML `<tr><td>` table format (`job_sources.TRACKER_REPOS["simplify"]`).
+2. **GitHub new-grad trackers** (`job_sources.fetch_trackers()`, `job_sources.TRACKER_REPOS`) — three broad, community-maintained trackers covering hundreds of companies (startups included), not just the ~23 in `ATS_BOARDS`: `SimplifyJobs/New-Grad-Positions` (`"simplify"`, HTML `<tr><td>` format), `vanshb03/New-Grad-2027` (`"vansh"`), and `speedyapply/2027-SWE-College-Jobs` (`"speedyapply"`, both markdown pipe-table format). Each `TRACKER_REPOS` entry is `(raw_readme_url, format)` with `format` in `{"html", "pipe"}`; `parse_tracker_markdown()` handles the HTML format, `parse_tracker_pipe_markdown()` the pipe-table format — the latter reads each table's own header row to map columns (`Company`/`Role`|`Position`/`Location`/`Application-Link`|`Posting`/`Date Posted`|`Age`) rather than assuming fixed indices, since column layout isn't even consistent within one file (speedyapply's "Other" section drops the "Salary" column its "FAANG+"/"Quant" sections have). Added 2026-09-01 so the pipeline isn't limited to a small hardcoded company list — these trackers are crowdsourced from any company's postings, startups included. Verify these repos are still alive periodically; they get renamed/archived year to year (the vanshb03 repo itself is a fork-continuation of the now-archived `cvrve/New-Grad-2027`).
 3. **LinkedIn job search** (`linkedin_source.fetch_linkedin()`) — covers FAANG and any other company without a public ATS API (Google, Apple, Amazon, Meta, Microsoft, etc.) by scraping LinkedIn's logged-in job-search results. This is the ToS-sensitive path — see the dedicated **LinkedIn ToS & Risk** subsection under "Recruiter Discovery & Outreach" below for the full mitigation list (12h throttle, 40-page cap, randomized delays, abort-on-checkpoint); `fetch_linkedin()`'s docstring documents the 5 possible status values (`ok`, `no-session`, `throttled`, `checkpoint`, `error`).
 
 Every fetched posting is run through `filters.is_target()` (title/description regex matching for new-grad + target-role signals) before being treated as a match; `filters.match_strength()` then scores it 0-3 for digest ranking.
@@ -327,7 +328,7 @@ CREATE TABLE recruiters (
 )
 ```
 
-`recruiter_finder.TARGET_COMPANIES` currently lists **23 companies** (19 original + 4 added: Databricks, Scale AI, Coinbase, Snowflake — the remaining new ATS companies from Phase 6 are a known coverage gap, left for later work). This list is separate from `job_sources.ATS_BOARDS` and doesn't need to match it 1:1.
+`recruiter_finder.TARGET_COMPANIES` currently lists **28 companies** (19 original + 4 added: Databricks, Scale AI, Coinbase, Snowflake + 2 added 2026-07-20 after showing up in a LinkedIn job-search sweep: Netic, Northwood + 2 added 2026-07-22/2026-07-24: Affirm, Lyft — both `job_sources.ATS_BOARDS` companies that were missing here + 1 added 2026-07-24: NVIDIA, after 3 straight days of tracker sweeps — the remaining new ATS companies from Phase 6, and most companies surfaced only via the SimplifyJobs tracker, are a known coverage gap, left for later work). This list is separate from `job_sources.ATS_BOARDS` and doesn't need to match it 1:1.
 
 ### Automatic trigger (30-day TTL)
 

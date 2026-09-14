@@ -42,6 +42,9 @@ RESULTS_PER_PAGE = 25
 # Real role/qualifier vocabulary from filters.py's ROLE_PATTERNS/INCLUDE_PATTERNS
 # (not invented phrasing) — e.g. "software engineer" matches
 # r"software\s+engineer", "new grad" matches r"new[\s-]*grad", etc.
+# "2027 start date" catches postings phrased around a start date/cohort year
+# rather than "new grad"/"entry level" (still covered downstream by
+# filters.py's bare r"\b2027\b" INCLUDE_PATTERN either way).
 _ROLE_TERMS = [
     "software engineer",
     "data scientist",
@@ -49,7 +52,7 @@ _ROLE_TERMS = [
     "machine learning engineer",
     "software developer",
 ]
-_QUALIFIER_TERMS = ["new grad", "entry level"]
+_QUALIFIER_TERMS = ["new grad", "entry level", "2027 start date"]
 
 SEARCH_QUERIES = [f"{role} {qualifier}" for role in _ROLE_TERMS for qualifier in _QUALIFIER_TERMS]
 

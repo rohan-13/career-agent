@@ -57,6 +57,20 @@ TARGET_COMPANIES = [
     {"name": "Scale AI",   "domain": "scale.com",      "linkedin_slug": "scaleai"},
     {"name": "Coinbase",   "domain": "coinbase.com",   "linkedin_slug": "coinbase"},
     {"name": "Snowflake",  "domain": "snowflake.com",  "linkedin_slug": "snowflake-computing"},
+    # Added 2026-07-20 after showing up in a LinkedIn new-grad job search sweep.
+    {"name": "Netic",      "domain": "netic.ai",         "linkedin_slug": "netic-ai"},
+    {"name": "Northwood",  "domain": "northwoodspace.io", "linkedin_slug": "northwood-space"},
+    # Added 2026-07-22: on job_sources.ATS_BOARDS (direct-tracked) but was
+    # missing here, so its top-scoring new-grad posting got no recruiter
+    # discovery this run.
+    {"name": "Affirm",     "domain": "affirm.com",       "linkedin_slug": "affirm"},
+    # Added 2026-07-24: showed up in 3 straight days of new-grad sweeps
+    # (SimplifyJobs tracker, not job_sources.ATS_BOARDS) without ever
+    # triggering recruiter discovery.
+    {"name": "NVIDIA",     "domain": "nvidia.com",       "linkedin_slug": "nvidia"},
+    # Added 2026-07-24: same gap as Affirm -- on job_sources.ATS_BOARDS
+    # (direct-tracked) but missing here; today's top-scoring posting (7).
+    {"name": "Lyft",       "domain": "lyft.com",         "linkedin_slug": "lyft"},
 ]
 
 # Title substrings that mark a person as relevant to new-grad outreach

@@ -152,13 +152,20 @@ def fetch_ats_boards():
     return jobs
 
 
-# --- GitHub new-grad trackers (HTML tables) ---
-# The Simplify repo uses HTML <tr><td> tables (not markdown pipes).
-# Each row: <tr>\n<td>Company</td>\n<td>Title</td>\n<td>Location</td>\n<td>Apply</td>\n<td>Age</td>
-
-# Verify in Task 4 Step 5 that these repos are alive; swap/add active 2027 trackers.
+# --- GitHub new-grad trackers ---
+# Two README formats are in the wild: Simplify's HTML <tr><td> tables, and the
+# markdown pipe-tables (| Company | Role | ... |) used by vanshb03/speedyapply.
+# Each entry maps source -> (raw README url, format), format in {"html", "pipe"}.
+#
+# These are broad, community-maintained trackers covering hundreds of companies
+# (startups included) beyond the ~23 in ATS_BOARDS -- added 2026-09-01 so the
+# job pipeline isn't limited to a small hardcoded company list. Verify these
+# repos are still alive periodically; they get renamed/archived year to year
+# (e.g. cvrve/New-Grad-2027 -> vanshb03/New-Grad-2027).
 TRACKER_REPOS = {
-    "simplify": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
+    "simplify": ("https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md", "html"),
+    "vansh": ("https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/README.md", "pipe"),
+    "speedyapply": ("https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md", "pipe"),
 }
 
 _HREF_RE = re.compile(r'href="([^"]+)"')
@@ -228,13 +235,120 @@ def parse_tracker_markdown(md, source):
     return jobs
 
 
+# --- Markdown pipe-table trackers (vanshb03/New-Grad-2027, speedyapply/2027-SWE-College-Jobs) ---
+# These use standard `| col | col |` markdown tables rather than Simplify's raw HTML.
+# Column layout isn't fixed even within one file -- speedyapply's "Other" section
+# drops the Salary column that its "FAANG+"/"Quant" sections have -- so each table's
+# own header row is read to map column names to indices, rather than assuming
+# fixed positions.
+
+_PIPE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
+_PIPE_SEP_RE = re.compile(r"^\|[\s:|-]+\|\s*$")
+
+_MONTH_NUM = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTHDAY_RE = re.compile(r"^([A-Za-z]{3})[a-z]*\s+(\d{1,2})$")
+
+# Header aliases -> the field they map to. Matching is case-insensitive against
+# the table's own header cells, so a repo renaming "Role" to "Position" (as
+# speedyapply does vs. vanshb03's "Role") still resolves correctly.
+_PIPE_HEADER_ALIASES = {
+    "company": {"company"},
+    "title": {"position", "role", "title"},
+    "location": {"location"},
+    "link": {"application/link", "posting", "apply", "link"},
+    "date": {"date posted", "age", "posted"},
+}
+
+
+def _split_pipe_row(line):
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [c.strip() for c in inner.split("|")]
+
+
+def _classify_pipe_headers(header_cells):
+    col = {}
+    for i, cell in enumerate(header_cells):
+        key = cell.strip().lower()
+        for field, aliases in _PIPE_HEADER_ALIASES.items():
+            if field not in col and key in aliases:
+                col[field] = i
+    return col
+
+
+def _monthday_to_date(cell):
+    """Convert a bare 'Aug 05'-style date (no year) to an ISO date, inferring
+    the year from today's date (rolls back a year if the month/day would
+    otherwise land in the future -- these trackers only list recent postings)."""
+    m = _MONTHDAY_RE.match(cell.strip())
+    if not m:
+        return ""
+    month = _MONTH_NUM.get(m.group(1).lower())
+    if not month:
+        return ""
+    day = int(m.group(2))
+    today = datetime.date.today()
+    try:
+        d = datetime.date(today.year, month, day)
+    except ValueError:
+        return ""  # e.g. Feb 30 -- malformed, don't guess
+    if d > today:
+        d = datetime.date(today.year - 1, month, day)
+    return d.isoformat()
+
+
+def parse_tracker_pipe_markdown(md, source):
+    """Parse GitHub new-grad trackers that use markdown pipe tables instead of
+    Simplify's HTML <tr><td> format (vanshb03/New-Grad-2027, speedyapply/2027-SWE-College-Jobs).
+    """
+    lines = md.splitlines()
+    jobs = []
+    col = {}
+    for i, line in enumerate(lines):
+        if i > 0 and _PIPE_SEP_RE.match(line) and _PIPE_ROW_RE.match(lines[i - 1]):
+            col = _classify_pipe_headers(_split_pipe_row(lines[i - 1]))
+            continue
+        if not col or "company" not in col or "title" not in col:
+            continue
+        if not _PIPE_ROW_RE.match(line):
+            continue
+        cells = _split_pipe_row(line)
+        if len(cells) < 3 or col["company"] >= len(cells) or col["title"] >= len(cells):
+            continue
+        company = _strip_tags(cells[col["company"]])
+        title = _strip_tags(cells[col["title"]])
+        if not company or not title:
+            continue
+        location = _strip_tags(cells[col["location"]]) if "location" in col and col["location"] < len(cells) else ""
+        link_cell = cells[col["link"]] if "link" in col and col["link"] < len(cells) else ""
+        url = _first_url(link_cell)
+        if not url:
+            continue  # locked/closed row (🔒), or no application link yet
+        date_cell = cells[col["date"]] if "date" in col and col["date"] < len(cells) else ""
+        posted_date = _age_to_date(date_cell) or _monthday_to_date(date_cell)
+        jobs.append({
+            "title": title, "company": company, "location": location,
+            "url": url, "posted_date": posted_date, "source": source,
+        })
+    return jobs
+
+
+_TRACKER_PARSERS = {"html": parse_tracker_markdown, "pipe": parse_tracker_pipe_markdown}
+
+
 def fetch_trackers():
     jobs = []
-    for source, url in TRACKER_REPOS.items():
+    for source, (url, fmt) in TRACKER_REPOS.items():
         try:
             res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
             res.raise_for_status()
-            jobs += parse_tracker_markdown(res.text, source)
+            jobs += _TRACKER_PARSERS[fmt](res.text, source)
         except Exception as e:
             logging.warning("Tracker fetch failed for %s: %s", source, e)
     return jobs
