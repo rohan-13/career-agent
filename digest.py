@@ -28,10 +28,11 @@ load_dotenv(pathlib.Path(__file__).parent / ".env")
 DB_PATH = pathlib.Path(__file__).parent / "events.db"
 DIGEST_DIR = pathlib.Path(__file__).parent / "digests"
 
-# Sources emitted directly by fetch_ats_boards() (see job_sources.py's
-# parse_greenhouse/parse_lever/parse_ashby) vs. secondary sources (GitHub
-# trackers, LinkedIn) that are slower/noisier to reach.
-_DIRECT_ATS_SOURCES = {"greenhouse", "lever", "ashby"}
+# Sources emitted directly by fetch_ats_boards()/fetch_workday_boards() (see
+# job_sources.py's parse_greenhouse/parse_lever/parse_ashby, and the Workday
+# CXS fetcher added 2026-09-14) vs. secondary sources (GitHub trackers,
+# LinkedIn) that are slower/noisier to reach.
+_DIRECT_ATS_SOURCES = {"greenhouse", "lever", "ashby", "workday"}
 
 
 # ── Scoring ──────────────────────────────────────────────────────────────────

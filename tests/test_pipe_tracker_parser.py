@@ -105,6 +105,9 @@ def test_fetch_trackers_dispatches_html_and_pipe_parsers(monkeypatch):
         "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md": html_sample,
         "https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/README.md": VANSH_SAMPLE,
         "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md": SPEEDY_SAMPLE,
+        # speedyapply's separate AI/DS/ML new-grad repo uses the same pipe
+        # format as its SWE repo, so the SPEEDY_SAMPLE fixture doubles for both.
+        "https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/NEW_GRAD_USA.md": SPEEDY_SAMPLE,
     }
 
     def fake_get(url, timeout=None, headers=None):
@@ -113,5 +116,5 @@ def test_fetch_trackers_dispatches_html_and_pipe_parsers(monkeypatch):
     monkeypatch.setattr(job_sources.requests, "get", fake_get)
     jobs = job_sources.fetch_trackers()
     sources = {j["source"] for j in jobs}
-    assert sources == {"simplify", "vansh", "speedyapply"}
-    assert len(jobs) == 1 + 2 + 2  # simplify + vansh + speedyapply sample counts
+    assert sources == {"simplify", "vansh", "speedyapply", "speedyapply-ai"}
+    assert len(jobs) == 1 + 2 + 2 + 2  # simplify + vansh + speedyapply + speedyapply-ai sample counts

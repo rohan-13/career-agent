@@ -71,3 +71,83 @@ def test_include_signal_in_description_only():
 def test_non_software_engineering_excluded():
     assert not filters.is_target("New Grad Mechanical Engineer")
     assert not filters.is_target("Sales Engineer, Entry Level")
+
+
+# ── Location filtering (added 2026-09-14) ───────────────────────────────────
+
+def test_is_us_or_remote_us_state_true():
+    assert filters.is_us_or_remote("Boston, MA")
+
+
+def test_is_us_or_remote_usa_literal_true():
+    assert filters.is_us_or_remote("Remote - USA")
+    assert filters.is_us_or_remote("Some Office, United States")
+
+
+def test_is_us_or_remote_bare_remote_true():
+    assert filters.is_us_or_remote("Remote")
+
+
+def test_is_us_or_remote_missing_location_true():
+    assert filters.is_us_or_remote("")
+    assert filters.is_us_or_remote(None)
+
+
+def test_is_us_or_remote_ambiguous_city_code_true():
+    # No state/country signal at all -- these show up constantly in ATS data
+    # (SF, NYC, LA) and are effectively always US roles in this pipeline.
+    assert filters.is_us_or_remote("SF")
+    assert filters.is_us_or_remote("NYC")
+
+
+def test_is_us_or_remote_canada_only_false():
+    assert not filters.is_us_or_remote("Toronto, ON, Canada")
+    assert not filters.is_us_or_remote("Burnaby, BC, Canada")
+
+
+def test_is_us_or_remote_remote_canada_false():
+    assert not filters.is_us_or_remote("Remote - Canada")
+
+
+def test_is_us_or_remote_remote_canada_no_separator_false():
+    # Regression: Greenhouse renders this as "Remote Canada" (space, no dash)
+    # -- found live 2026-09-14 on an Affirm posting that slipped past the
+    # dash-required version of this check.
+    assert not filters.is_us_or_remote("Remote Canada")
+
+
+def test_is_us_or_remote_uk_only_false():
+    assert not filters.is_us_or_remote("London, UK")
+
+
+def test_is_us_or_remote_other_country_false():
+    assert not filters.is_us_or_remote("Remote - Ukraine")
+    assert not filters.is_us_or_remote("Bengaluru, India")
+
+
+def test_is_target_excludes_canada_only_location():
+    assert not filters.is_target(
+        "Software Engineer New Grad - 2027 Graduate", location="Burnaby, BC, Canada"
+    )
+
+
+def test_is_target_excludes_uk_only_location():
+    assert not filters.is_target(
+        "Software Engineer New Grad", location="London, UK"
+    )
+
+
+def test_is_target_keeps_us_location():
+    assert filters.is_target(
+        "Software Engineer New Grad", location="Boston, MA"
+    )
+
+
+def test_is_target_keeps_remote():
+    assert filters.is_target("Software Engineer New Grad", location="Remote")
+
+
+def test_is_target_missing_location_not_excluded():
+    # Backward compatible: callers (and older tests) that don't pass a
+    # location at all must not have jobs silently excluded.
+    assert filters.is_target("Software Engineer New Grad")

@@ -38,8 +38,14 @@ def init_jobs_table(db_path=None):
 
 # 85 matches parser.py's events threshold and catches cross-source title
 # variants like "Software Engineer, New Grad" vs "... New Grad (2027)".
+# COLLATE NOCASE: different sources capitalize the same company differently
+# (Simplify's tracker says "Autostore", speedyapply's says "AutoStore") --
+# without this, a case-sensitive company match misses the fuzzy title check
+# entirely and both rows get inserted as if they were different companies.
 def _is_duplicate(con, job, threshold=85):
-    rows = con.execute("SELECT title FROM jobs WHERE company = ?", (job["company"],)).fetchall()
+    rows = con.execute(
+        "SELECT title FROM jobs WHERE company = ? COLLATE NOCASE", (job["company"],)
+    ).fetchall()
     return any(fuzz.token_sort_ratio(job["title"], r[0]) >= threshold for r in rows)
 
 
@@ -166,6 +172,13 @@ TRACKER_REPOS = {
     "simplify": ("https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md", "html"),
     "vansh": ("https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/README.md", "pipe"),
     "speedyapply": ("https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md", "pipe"),
+    # Added 2026-09-14: speedyapply also maintains a SEPARATE repo specifically
+    # for AI/Data-Science/ML new-grad roles (2027-AI-College-Jobs), distinct
+    # from their SWE-only repo above -- same pipe-table format, but ~450 listings
+    # not otherwise covered. Gap found when a DraftKings "Data Science Engineer
+    # (December 2026 and May 2027 Grads)" posting the user found manually turned
+    # out to be listed here (and nowhere else we track).
+    "speedyapply-ai": ("https://raw.githubusercontent.com/speedyapply/2027-AI-College-Jobs/main/NEW_GRAD_USA.md", "pipe"),
 }
 
 _HREF_RE = re.compile(r'href="([^"]+)"')
@@ -351,4 +364,84 @@ def fetch_trackers():
             jobs += _TRACKER_PARSERS[fmt](res.text, source)
         except Exception as e:
             logging.warning("Tracker fetch failed for %s: %s", source, e)
+    return jobs
+
+
+# --- Workday campus/early-career boards (direct-tracked) ---
+# Added 2026-09-14, same gap-fix session as speedyapply-ai above. Many
+# companies run Workday with MULTIPLE "sites" on one tenant: a general board
+# (often 50-100+ postings, mostly senior/experienced) and a separate, much
+# smaller campus/early-career site aimed specifically at students and new
+# grads. DraftKings is the first example found: its general "DraftKings" site
+# had ~90 postings and did NOT include the new-grad Data Science Engineer
+# posting the user found; a dedicated "campus_career_portal" site (7 postings
+# total) did. That early-career site is the one worth direct-tracking here --
+# far higher signal, and not dependent on a GitHub tracker having scraped it
+# yet. Unlike ATS_BOARDS (single global endpoint per provider), each Workday
+# tenant's shard number (wd1, wd5, ...) and site name are tenant-specific and
+# not guessable -- find both from the company's public "early careers"/campus
+# recruiting page (its Apply links reveal the host + site segment).
+#
+# company: (tenant, host, site). host includes the wdN shard.
+WORKDAY_BOARDS = {
+    "DraftKings": ("draftkings", "draftkings.wd1.myworkdayjobs.com", "campus_career_portal"),
+}
+
+_WORKDAY_RELATIVE_DAYS_RE = re.compile(r"posted\s+(\d+)\+?\s+days?\s+ago", re.IGNORECASE)
+
+
+def _workday_posted_to_date(text):
+    """Convert Workday's relative 'Posted N Days Ago' / 'Posted Today' text to
+    an ISO date. '30+ Days Ago' is treated as exactly 30 (a floor, not exact) --
+    fine for our purposes since match_strength/ranking doesn't need precision
+    past 'this is roughly a month-old-or-more posting'."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if re.search(r"\btoday\b", text, re.IGNORECASE):
+        return datetime.date.today().isoformat()
+    m = _WORKDAY_RELATIVE_DAYS_RE.search(text)
+    if not m:
+        return ""
+    days = int(m.group(1))
+    return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+
+
+def fetch_workday_boards():
+    jobs = []
+    for company, (tenant, host, site) in WORKDAY_BOARDS.items():
+        url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
+        offset = 0
+        try:
+            while True:
+                res = requests.post(
+                    url,
+                    timeout=20,
+                    headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
+                    # A single space, not "", as searchText -- Workday's CXS API
+                    # rejects an empty string with HTTP 400 but treats a blank
+                    # space as "browse all" (verified live against DraftKings'
+                    # tenant). limit must stay <=20 or the API 400s.
+                    json={"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": " "},
+                )
+                res.raise_for_status()
+                data = res.json()
+                postings = data.get("jobPostings", [])
+                for p in postings:
+                    jobs.append({
+                        "title": p.get("title", ""),
+                        "company": company,
+                        "location": p.get("locationsText", ""),
+                        # Workday's public apply links carry an "en-US" locale
+                        # segment before the site name that the CXS API response
+                        # itself omits.
+                        "url": f"https://{host}/en-US/{site}{p.get('externalPath', '')}",
+                        "posted_date": _workday_posted_to_date(p.get("postedOn", "")),
+                        "source": "workday",
+                    })
+                offset += len(postings)
+                if not postings or offset >= data.get("total", 0):
+                    break
+        except Exception as e:
+            logging.warning("Workday fetch failed for %s (%s/%s): %s", company, tenant, site, e)
     return jobs

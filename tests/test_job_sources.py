@@ -56,3 +56,19 @@ def test_in_batch_duplicates_inserted_once(tmp_path):
     near_title = dict(JOB, url="https://simplify.jobs/p/xyz", title="Software Engineer, New Grad (2027)")
     new = job_sources.insert_jobs([JOB, same_url, near_title], db_path=db)
     assert len(new) == 1
+
+
+def test_fuzzy_title_duplicate_skipped_across_differently_cased_company(tmp_path):
+    """Regression: Simplify's tracker said "Autostore", speedyapply's said
+    "AutoStore" for the identical posting -- a case-sensitive company match
+    let both through as if they were different companies (found 2026-09-14
+    while verifying the new speedyapply-ai tracker's inserts)."""
+    db = tmp_path / "test.db"
+    job_sources.insert_jobs([JOB], db_path=db)
+    same_job_recased = dict(
+        JOB,
+        company="STRIPE",
+        url="https://simplify.jobs/p/recased",
+    )
+    new = job_sources.insert_jobs([same_job_recased], db_path=db)
+    assert new == []

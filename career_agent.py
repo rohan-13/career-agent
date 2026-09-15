@@ -205,12 +205,20 @@ def run_jobs_pipeline():
     except Exception as e:
         logging.warning("fetch_trackers failed: %s", e)
 
+    try:
+        all_jobs += job_sources.fetch_workday_boards()
+    except Exception as e:
+        logging.warning("fetch_workday_boards failed: %s", e)
+
     li_jobs, li_status = linkedin_source.fetch_linkedin()
     all_jobs += li_jobs
     if li_status != "ok":
         notes.append(_LINKEDIN_STATUS_NOTES.get(li_status, f"LinkedIn: {li_status}"))
 
-    targeted_jobs = [j for j in all_jobs if filters.is_target(j.get("title", ""), j.get("description", ""))]
+    targeted_jobs = [
+        j for j in all_jobs
+        if filters.is_target(j.get("title", ""), j.get("description", ""), j.get("location", ""))
+    ]
     for job in targeted_jobs:
         job["match_score"] = filters.match_strength(job["title"])
 
